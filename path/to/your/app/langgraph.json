@@ -1,0 +1,12 @@
+{
+  "projects": [
+    {
+      "name": "The-War-Room",
+      "dir": ".",
+      "graphs": {
+        "agent": "./agent.py:graph"
+      },
+      "env": ".env"
+    }
+  ]
+}
