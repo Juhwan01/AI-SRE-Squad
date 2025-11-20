@@ -66,7 +66,14 @@ async def get_forecast(latitude: float, longitude: float) -> str:
     points_data = await make_nws_request(points_url)
 
     if not points_data:
-        return "Unable to fetch forecast data for this location."
+        # 미국 외 지역이면 기본값으로 뉴욕 날씨 제공
+        print(f"[INFO] Failed to get forecast for ({latitude}, {longitude}). Using New York as fallback.")
+        latitude, longitude = 40.7128, -74.0060  # 뉴욕 좌표
+        points_url = f"{NWS_API_BASE}/points/{latitude},{longitude}"
+        points_data = await make_nws_request(points_url)
+
+        if not points_data:
+            return "Unable to fetch forecast data for this location."
 
     # Get the forecast URL from the points response
     forecast_url = points_data["properties"]["forecast"]
