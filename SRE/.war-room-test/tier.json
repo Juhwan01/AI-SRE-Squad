@@ -1,0 +1,47 @@
+{
+  "servers": [
+    {
+      "name": "@modelcontextprotocol/server-docker",
+      "package": "@modelcontextprotocol/server-docker",
+      "version": "1.0.0",
+      "tier": "tier1_hot",
+      "total_usage_count": 87,
+      "weekly_usage_count": 87,
+      "last_used_at": "2025-12-01T20:24:05.577164",
+      "first_seen_at": "2025-12-01T19:19:15.946479",
+      "image_name": null,
+      "image_cached": false,
+      "image_size_mb": 0,
+      "last_tier_adjustment": "2025-12-01T19:19:15.954479"
+    },
+    {
+      "name": "@modelcontextprotocol/server-postgres",
+      "package": "@modelcontextprotocol/server-postgres",
+      "version": "1.0.0",
+      "tier": "tier2_warm",
+      "total_usage_count": 5,
+      "weekly_usage_count": 5,
+      "last_used_at": "2025-12-01T19:36:35.939291",
+      "first_seen_at": "2025-12-01T19:36:35.924304",
+      "image_name": null,
+      "image_cached": false,
+      "image_size_mb": 0,
+      "last_tier_adjustment": null
+    },
+    {
+      "name": "redis-mcp",
+      "package": "redis-mcp",
+      "version": "0.5.0",
+      "tier": "tier3_cold",
+      "total_usage_count": 0,
+      "weekly_usage_count": 0,
+      "last_used_at": null,
+      "first_seen_at": "2025-12-01T19:36:35.925287",
+      "image_name": null,
+      "image_cached": false,
+      "image_size_mb": 0,
+      "last_tier_adjustment": null
+    }
+  ],
+  "last_weekly_reset": "2025-12-01T20:24:05.577164"
+}

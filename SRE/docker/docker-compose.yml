@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # War Room 2.0 Manager (항상 실행)
+  war-room-manager:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.manager
+    container_name: war-room-manager
+    hostname: war-room-manager
+    restart: unless-stopped
+
+    # Docker 소켓 마운트 (컨테이너 관리용)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - war-room-data:/app/.war-room
+      - ../src:/app/src  # 개발 중에는 소스 마운트
+
+    # 네트워크
+    networks:
+      - war-room-network
+
+    # 환경 변수
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+    # 리소스 제한
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 200M
+          cpus: '0.25'
+
+    # 헬스체크
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # MCP Server Base Image Builder
+  # 실제 MCP 서버들은 War Room Manager가 동적으로 시작
+  mcp-base-builder:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mcp-base
+    image: mcp/base:latest
+    container_name: mcp-base-builder
+    command: echo "MCP Base Image Built"
+    profiles:
+      - build-only
+
+networks:
+  war-room-network:
+    name: war-room-network
+    driver: bridge
+
+volumes:
+  war-room-data:
+    name: war-room-data

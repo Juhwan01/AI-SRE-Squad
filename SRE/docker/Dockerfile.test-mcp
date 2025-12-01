@@ -1,0 +1,16 @@
+# 테스트용 간단한 MCP 서버 이미지
+FROM node:20-slim
+
+WORKDIR /app
+
+# 환경 변수로 MCP 패키지 받기
+ENV MCP_PACKAGE=""
+
+# 간단한 테스트 스크립트
+RUN echo '#!/bin/sh' > /app/run.sh && \
+    echo 'echo "MCP Server: $MCP_PACKAGE"' >> /app/run.sh && \
+    echo 'echo "Status: Running"' >> /app/run.sh && \
+    echo 'sleep infinity' >> /app/run.sh && \
+    chmod +x /app/run.sh
+
+CMD ["/app/run.sh"]

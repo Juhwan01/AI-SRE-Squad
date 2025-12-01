@@ -1,0 +1,28 @@
+# MCP Server Base Dockerfile
+# 모든 MCP 서버의 베이스 이미지
+
+FROM node:20-slim
+
+LABEL maintainer="AI-SRE-Squad"
+LABEL description="Base image for MCP Servers"
+
+# 작업 디렉토리
+WORKDIR /mcp
+
+# 기본 도구 설치
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# NPM 글로벌 설정 (빠른 설치)
+RUN npm config set registry https://registry.npmjs.org/
+
+# 컨테이너 실행 스크립트
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+
+# 기본 명령 (개별 MCP 서버 이미지에서 오버라이드)
+CMD ["echo", "MCP Server Base Image"]
