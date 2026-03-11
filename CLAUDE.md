@@ -4,104 +4,141 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AI-SRE-Squad is an AI-powered SRE (Site Reliability Engineering) automation framework for incident response. It uses a multi-agent LangGraph workflow to route incidents to specialist agents, analyze logs, generate fix patches, and report via Slack.
+AI-SRE-Squad는 LangGraph 기반 멀티 에이전트 SRE 자동화 프레임워크다. 인시던트 이벤트가 들어오면 Supervisor가 LLM으로 장애 유형을 판단해 전문 에이전트에 라우팅하고, 각 에이전트는 MCP 서버 툴을 사용해 실제 시스템에 접근해 분석 및 조치 후 Slack으로 리포팅한다.
 
 ## Architecture
 
-### Two-Tier Design
-
-**LangGraph Tier** (`LangGraph/`) — Multi-agent orchestration:
-- `supervisor_agent.py` routes incidents by event type prefix (`db_*`, `nginx_*`, `resource_*`)
-- Specialist agents analyze domain-specific logs using LLMs and store findings in shared `GraphState`
-- `manager_agent.py` aggregates results for Slack reporting (WIP)
-
-**MCP Tier** — Tool/API integration via Model Context Protocol:
-- `client-server/client.py` — AWS Bedrock + MCP client (iterative tool-use loop)
-- `weather/weather.py` — FastMCP server example
-- `MCP_test/` — Integration tests for Slack and PostgreSQL MCP connections
-
-### State Flow
+### 전체 흐름
 
 ```
-Event → supervisor_agent (routes by type) → specialist agent (LLM analysis) → manager_agent → END
+장애 이벤트 입력
+    ↓
+supervisor_agent  ← LLM(ChatOpenAI)이 이벤트 내용 분석 → next_agent 결정
+    ↓ (conditional_edges로 자동 분기)
+┌─────────────────────────────────────────┐
+│  db_reliability_agent                   │  PostgreSQL MCP 툴로 DB 직접 조회
+│  network_reliability_agent              │  로그 파싱 + nginx 설정 분석 + patch 생성
+│  system_resource_agent                  │  syslog/journalctl/Event Viewer 분석
+└─────────────────────────────────────────┘
+    ↓
+manager_agent  ← Slack MCP 툴로 채널에 리포트 전송 (현재 supervisor fallback으로만 호출됨)
+    ↓
+END
 ```
 
-All agents share `GraphState` (defined in `LangGraph/state.py`):
-- `event`: Incident metadata (type, service, timestamp, log, code_repo)
-- `next_agent`: Routing target set by supervisor
-- `context`: Dict accumulating per-agent findings
-- `logs`: Audit trail
-- `result`: Final aggregated output
+### Supervisor 라우팅 방식
 
-### MCP Tool-Use Loop Pattern
+`supervisor_agent.py`는 `ChatOpenAI.with_structured_output(RouterDecision)`을 사용해 LLM이 이벤트 전체 내용을 보고 라우팅 대상을 결정한다. 하드코딩된 문자열 비교 없음.
 
-`client-server/client.py` implements: connect → list tools → invoke Bedrock → if tool_use → execute tool → re-invoke → repeat until stop_reason is not `tool_use` (max 5 iterations)
+```python
+class RouterDecision(BaseModel):
+    next_agent: Literal["db_reliability_agent", "network_reliability_agent", ...]
+    reasoning: str  # 판단 근거 (logs에 기록됨)
+```
 
-## Commands
+### MCP 통합 방식
 
-### Running the SRE Workflow
+각 에이전트는 `langchain-mcp-adapters`의 `load_mcp_tools(session)`으로 MCP 툴을 LangChain Tool 형식으로 변환해 `create_react_agent`에 주입한다. MCP 서버는 **npx로 subprocess 실행(stdio 전송)** — 미리 서버를 켜놓을 필요 없음.
+
+```python
+async with stdio_client(server_params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+        tools = await load_mcp_tools(session)   # MCP → LangChain Tool 변환
+        agent = create_react_agent(llm, tools)
+        result = await agent.ainvoke({...})
+```
+
+GraphState Agent 함수는 동기 함수(`def`)이므로 `asyncio.run()`으로 비동기 MCP 호출을 브릿지한다.
+
+### GraphState (`LangGraph/state.py`)
+
+| 필드 | 타입 | 역할 |
+|------|------|------|
+| `event` | `Dict` | 인시던트 원본 데이터 (type, service, timestamp, log, code_repo) |
+| `next_agent` | `Optional[str]` | supervisor가 세팅, graph router가 읽어서 분기 |
+| `context` | `Dict` | 각 에이전트 분석 결과 누적 (`context["db"]`, `context["network"]` 등) |
+| `logs` | `List[str]` | 전체 실행 감사 로그 |
+| `result` | `Optional[Any]` | 최종 결과 |
+
+## 실행 방법
+
+### 패키지 설치
+
+```bash
+pip install langchain-openai langgraph langchain-mcp-adapters mcp python-dotenv
+```
+
+### 환경변수 설정 (`.env`)
+
+```
+OPENAI_API_KEY=sk-...
+
+# DB Agent
+DATABASE_URL=postgresql://user:pass@host:port/dbname
+
+# Manager Agent (Slack)
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_TEAM_ID=T...
+TARGET_CHANNEL=C...
+```
+
+### 워크플로우 실행
 
 ```bash
 cd LangGraph
-python run.py          # Execute incident response with test event
+python run.py       # nginx 502 시나리오 테스트 이벤트 실행
 ```
 
-### Running MCP Integration Tests
+### MCP 연결 단독 테스트
 
 ```bash
 cd MCP_test/slack_mcp/mcp_server
-python test_agent.py                      # Slack MCP client test
+python test_agent.py        # Slack MCP 연결 테스트
 
 cd MCP_test/postgresql_mcp
-python mcp_client.py                      # PostgreSQL MCP client test
+python mcp_client.py        # PostgreSQL MCP 연결 테스트
 ```
 
-### Running the MCP Client (Bedrock)
+## 핵심 파일
 
-```bash
-cd client-server
-uv run client.py <path_to_server_script>  # e.g., ../weather/weather.py
+| 파일 | 역할 | 수정 시점 |
+|------|------|---------|
+| `LangGraph/state.py` | 공유 상태 스키마 | 에이전트 간 새 데이터 필드 추가 시 |
+| `LangGraph/graph.py` | 노드/엣지 정의 | 에이전트 추가/제거 시 |
+| `LangGraph/agents/supervisor_agent.py` | LLM 기반 라우터 | 새 에이전트 추가 시 `RouterDecision.next_agent` Literal에 추가 |
+| `LangGraph/agents/db_reliability_agent.py` | PostgreSQL MCP 연동 DB 분석 | DB 분석 프롬프트/로직 수정 시 |
+| `LangGraph/agents/network_reliability_agent.py` | nginx 로그 분석 + patch 생성 | 가장 복잡한 에이전트 (2단계 파이프라인) |
+| `LangGraph/agents/manager_agent.py` | Slack MCP 연동 리포팅 | Slack 메시지 포맷 수정 시 |
+| `LangGraph/run.py` | 테스트 실행 스크립트 | 테스트 이벤트 시나리오 변경 시 |
+
+## 새 에이전트 추가 방법
+
+1. `LangGraph/agents/<domain>_reliability_agent.py` 생성
+   - `async def _analyze(...)` — MCP 연결 + `create_react_agent` 실행
+   - `def <domain>_reliability_agent(state: GraphState) -> GraphState` — `asyncio.run()` 으로 호출
+2. `supervisor_agent.py`의 `RouterDecision.next_agent` Literal에 새 에이전트명 추가
+3. `graph.py`의 `create_graph()`에 노드 등록 및 엣지 연결
+4. `run.py`에서 import 후 `create_graph()`에 전달
+
+## 새 MCP 서버 연동 방법
+
+```python
+server_params = StdioServerParameters(
+    command="npx.cmd" if sys.platform == "win32" else "npx",
+    args=["-y", "@modelcontextprotocol/server-<name>", ...],
+    env={**os.environ}
+)
+async with stdio_client(server_params) as (read, write):
+    async with ClientSession(read, write) as session:
+        await session.initialize()
+        tools = await load_mcp_tools(session)
 ```
 
-### LangGraph Template (`path/to/your/app/`)
+MCP 서버 목록: https://github.com/modelcontextprotocol/servers
 
-```bash
-cd "path/to/your/app"
-make test              # pytest
-make lint              # ruff + mypy
-make format            # ruff format
-langgraph dev          # Start LangGraph Studio
-```
+## 현재 알려진 한계
 
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `LangGraph/state.py` | Shared state schema — modify here when adding new agent fields |
-| `LangGraph/graph.py` | Workflow edges — modify when adding/removing agents |
-| `LangGraph/agents/supervisor_agent.py` | Routing logic by event type prefix |
-| `LangGraph/agents/network_reliability_agent.py` | Most complex agent — LLM log parsing + patch generation |
-| `client-server/client.py` | Bedrock + MCP integration reference implementation |
-
-## Environment Variables Required
-
-- `OPENAI_API_KEY` — Used by `network_reliability_agent.py` (ChatOpenAI gpt-4.1-mini)
-- AWS credentials — Used by `client-server/client.py` (boto3/Bedrock)
-- Slack tokens — Required for `manager_agent.py` and Slack MCP tests
-
-## Extending the System
-
-**Adding a new specialist agent:**
-1. Create `LangGraph/agents/<domain>_reliability_agent.py` with `async def <domain>_agent(state: GraphState) -> GraphState`
-2. Add routing rule in `supervisor_agent.py` (event type prefix → agent name)
-3. Register node and edge in `LangGraph/graph.py`
-
-**Adding a new MCP server:**
-- Follow the pattern in `weather/weather.py` (FastMCP decorator-based tool registration)
-- Servers communicate via stdio subprocess transport
-
-## Current Limitations
-
-- `manager_agent.py` (Slack reporting) is a stub — not yet fully integrated
-- LangGraph specialist agents run in linear sequence (no parallel branch execution)
-- No persistent state storage between incidents
+- `manager_agent`는 supervisor가 알 수 없는 이벤트 타입을 받을 때만 호출됨 — 전체 에이전트 완료 후 항상 호출되도록 `graph.py` 수정 필요
+- specialist 에이전트들이 순차 실행만 지원 (복합 장애 시 병렬 분기 없음)
+- 인시던트 간 상태 영속성 없음 (매 실행마다 새로운 GraphState)

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__airis-mcp-gateway__airis-find"
+    ]
+  }
+}
